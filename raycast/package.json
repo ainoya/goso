@@ -1,0 +1,58 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "goso",
+  "title": "goso \u2014 AI Agent Usage",
+  "description": "Token usage, consumption and next reset for Claude Code, Codex, Gemini CLI and Antigravity.",
+  "icon": "command-icon.png",
+  "author": "ainoya",
+  "categories": [
+    "Developer Tools"
+  ],
+  "license": "MIT",
+  "private": true,
+  "commands": [
+    {
+      "name": "usage",
+      "title": "AI Agent Usage",
+      "subtitle": "goso",
+      "description": "Show token usage and next reset for every installed AI agent.",
+      "mode": "view"
+    },
+    {
+      "name": "menubar",
+      "title": "AI Agent Usage in Menu Bar",
+      "subtitle": "goso",
+      "description": "Keep the most-constrained quota window in the menu bar.",
+      "mode": "menu-bar",
+      "interval": "10m"
+    }
+  ],
+  "dependencies": {
+    "@goso/core": "link:../packages/core",
+    "@raycast/api": "^1.103.0",
+    "@raycast/utils": "^2.2.1"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^2.0.4",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.0",
+    "eslint": "^9.35.0",
+    "typescript": "^5.9.2"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "lint": "ray lint",
+    "publish": "npx @raycast/api@latest publish"
+  },
+  "preferences": [
+    {
+      "name": "cliPath",
+      "type": "textfield",
+      "required": false,
+      "title": "goso CLI path",
+      "description": "Path to the goso executable. Raycast's Node cannot read Antigravity's SQLite databases, so the extension calls the CLI when it is available. Leave empty to search ~/.local/bin, /opt/homebrew/bin and /usr/local/bin.",
+      "placeholder": "~/.local/bin/goso"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "name": "goso-workspace",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "description": "Token usage, consumption and next reset for Claude Code, Codex and Antigravity, in one view.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ainoya/goso.git"
+  },
+  "homepage": "https://github.com/ainoya/goso#readme",
+  "scripts": {
+    "goso": "node packages/cli/src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "raycast:dev": "pnpm --dir raycast --ignore-workspace dev",
+    "raycast:build": "pnpm --dir raycast --ignore-workspace build",
+    "test": "node --test \"packages/*/test/**/*.test.ts\"",
+    "raycast:install": "pnpm --dir raycast install --ignore-workspace",
+    "sample": "node scripts/sample.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2"
+  }
+}

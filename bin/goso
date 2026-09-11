@@ -1,0 +1,53 @@
+#!/bin/sh
+# Launcher: runs the CLI with the Node version pinned in mise.toml, from any
+# directory. Symlink it onto your PATH, e.g.
+#   ln -s "$PWD/bin/goso" ~/.local/bin/goso
+#
+# Callers such as Raycast spawn this with a minimal PATH that has neither mise
+# nor node on it, so both are also looked for where they are usually installed.
+set -e
+
+resolve_link() {
+  # `readlink -f` is not portable to older macOS; walk the symlinks by hand.
+  link=$1
+  while [ -L "$link" ]; do
+    target=$(readlink "$link")
+    case $target in
+      /*) link=$target ;;
+      *) link=$(dirname "$link")/$target ;;
+    esac
+  done
+  printf '%s\n' "$link"
+}
+
+SELF=$(resolve_link "$0")
+ROOT=$(CDPATH= cd -- "$(dirname -- "$SELF")/.." && pwd)
+ENTRY="$ROOT/packages/cli/src/main.ts"
+
+find_tool() {
+  name=$1
+  if command -v "$name" >/dev/null 2>&1; then
+    command -v "$name"
+    return 0
+  fi
+  for dir in "$HOME/.local/bin" /opt/homebrew/bin /usr/local/bin; do
+    if [ -x "$dir/$name" ]; then
+      printf '%s\n' "$dir/$name"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if MISE=$(find_tool mise); then
+  exec "$MISE" exec --cd "$ROOT" -- node "$ENTRY" "$@"
+fi
+
+# No mise: fall back to any node we can find (needs >= 22.18 for TS stripping,
+# and >= 24 for the Antigravity provider's node:sqlite).
+if NODE=$(find_tool node); then
+  exec "$NODE" "$ENTRY" "$@"
+fi
+
+echo "goso: neither mise nor node found on PATH" >&2
+exit 127
