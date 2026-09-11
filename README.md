@@ -36,7 +36,12 @@ from the same API call Claude Code's own `/usage` makes — see
 ## Requirements
 
 - macOS (paths are the macOS locations of each agent's data directory)
-- [mise](https://mise.jdx.dev) — pins Node 26 and pnpm
+- [mise](https://mise.jdx.dev) — pins the versions below
+
+The CLI runs on **bun**, which starts in about a quarter of the time node does;
+at these run times that is most of the wall clock. The sources are plain `node:`
+APIs, so **node 24+** runs them identically and is the fallback when bun is not
+installed. node is needed anyway to build the Raycast extension.
 
 ## Install
 
@@ -46,9 +51,10 @@ pnpm install
 ln -s "$PWD/bin/goso" ~/.local/bin/goso
 ```
 
-`bin/goso` runs the CLI through mise, so the pinned Node is used from any
-directory. There is no build step: Node 26 executes the TypeScript sources
-directly via type stripping.
+`bin/goso` resolves the runtime through mise, so the pinned versions are used
+from any directory. There is no build step — both runtimes execute the
+TypeScript sources directly. Set `GOSO_RUNTIME=node` (or `bun`) to pin the
+interpreter when reproducing a runtime-specific problem.
 
 ## Usage
 
@@ -199,11 +205,16 @@ time; it is rebuilt on the next run.
 ## Development
 
 ```bash
-pnpm test        # node:test
+pnpm test        # node:test — node is the reference runtime
+pnpm test:bun    # the same suite under bun
 pnpm typecheck   # tsc --noEmit
 pnpm goso        # run the CLI from the repo
 pnpm sample      # regenerate the README samples
 ```
+
+The suite is written against `node:test` and runs unchanged under both. Since
+the CLI ships on bun and falls back to node, a change that behaves differently
+on one of them is a bug — run both before touching a provider.
 
 The samples above come from a fixed fixture in `scripts/sample.ts`, rendered
 through the real renderer. Regenerate them with `pnpm sample` rather than
@@ -238,7 +249,8 @@ a naive scan dominates the run. Two things keep it fast:
   last run are read; conversation databases are skipped whole when unchanged.
 
 That is roughly 950ms on a cold cache — most of it the one network call — and
-about 200ms after.
+about 200ms after, of which interpreter startup is the largest remaining piece.
+That is why the launcher prefers bun: ~20ms to start against node's ~90ms.
 
 ## License
 

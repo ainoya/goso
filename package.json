@@ -14,13 +14,14 @@
   },
   "homepage": "https://github.com/ainoya/goso#readme",
   "scripts": {
-    "goso": "node packages/cli/src/main.ts",
+    "goso": "bun packages/cli/src/main.ts",
     "typecheck": "tsc --noEmit",
     "raycast:dev": "pnpm --dir raycast --ignore-workspace dev",
     "raycast:build": "pnpm --dir raycast --ignore-workspace build",
     "test": "node --test \"packages/*/test/**/*.test.ts\"",
     "raycast:install": "pnpm --dir raycast install --ignore-workspace",
-    "sample": "node scripts/sample.ts"
+    "sample": "node scripts/sample.ts",
+    "test:bun": "bun test packages/core/test"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

@@ -1,10 +1,15 @@
 #!/bin/sh
-# Launcher: runs the CLI with the Node version pinned in mise.toml, from any
-# directory. Symlink it onto your PATH, e.g.
+# Launcher: runs the CLI on the fastest runtime available, from any directory.
+# Symlink it onto your PATH, e.g.
 #   ln -s "$PWD/bin/goso" ~/.local/bin/goso
 #
-# Callers such as Raycast spawn this with a minimal PATH that has neither mise
-# nor node on it, so both are also looked for where they are usually installed.
+# bun is preferred over node — the work is short enough that interpreter startup
+# is most of it, and bun starts in about a quarter of the time. The sources are
+# plain node: APIs, so both produce the same output; node is the fallback so a
+# fresh clone works without installing bun.
+#
+# Callers such as Raycast spawn this with a minimal PATH that has none of these
+# on it, so each is also looked for where it is usually installed.
 set -e
 
 resolve_link() {
@@ -39,15 +44,28 @@ find_tool() {
   return 1
 }
 
+# GOSO_RUNTIME pins the interpreter, for reproducing a runtime-specific problem.
+RUNTIMES=${GOSO_RUNTIME:-"bun node"}
+
+# mise knows the versions this project pins, so ask it first — node below 24
+# silently loses the Antigravity provider, and pinning is how that is avoided.
+# Resolve to the binary and exec it directly: `mise exec` would mean a second
+# mise process, and at these run times that overhead is visible.
 if MISE=$(find_tool mise); then
-  exec "$MISE" exec --cd "$ROOT" -- node "$ENTRY" "$@"
+  for runtime in $RUNTIMES; do
+    if RESOLVED=$("$MISE" which --cd "$ROOT" "$runtime" 2>/dev/null) && [ -x "$RESOLVED" ]; then
+      exec "$RESOLVED" "$ENTRY" "$@"
+    fi
+  done
 fi
 
-# No mise: fall back to any node we can find (needs >= 22.18 for TS stripping,
-# and >= 24 for the Antigravity provider's node:sqlite).
-if NODE=$(find_tool node); then
-  exec "$NODE" "$ENTRY" "$@"
-fi
+# No mise: whatever is on PATH. node needs >= 22.18 for TypeScript stripping,
+# and >= 24 for the Antigravity provider's node:sqlite.
+for runtime in $RUNTIMES; do
+  if FOUND=$(find_tool "$runtime"); then
+    exec "$FOUND" "$ENTRY" "$@"
+  fi
+done
 
-echo "goso: neither mise nor node found on PATH" >&2
+echo "goso: no runtime found — install bun or node (or mise, which pins both)" >&2
 exit 127
