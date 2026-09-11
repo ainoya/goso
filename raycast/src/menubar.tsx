@@ -1,4 +1,4 @@
-import { Icon, MenuBarExtra, open } from "@raycast/api";
+import { Icon, MenuBarExtra, open, Keyboard } from "@raycast/api";
 import { usePromise } from "@raycast/utils";
 import { formatReset, nextReset, rankWindows } from "@goso/core";
 import { loadSnapshot, severityColor, windowSubtitle, windowValue } from "./shared.ts";
@@ -40,7 +40,11 @@ export default function Command() {
 
       <MenuBarExtra.Section>
         {data?.fallbackReason ? (
-          <MenuBarExtra.Item icon={Icon.Info} title="Running without the goso CLI" subtitle={data.fallbackReason} />
+          <MenuBarExtra.Item
+            icon={Icon.Info}
+            title="Running without the goso CLI"
+            subtitle={data.fallbackReason}
+          />
         ) : null}
         {soonest?.window.resetsAt !== undefined && snapshot ? (
           <MenuBarExtra.Item
@@ -53,7 +57,7 @@ export default function Command() {
           icon={Icon.ArrowClockwise}
           title="Refresh"
           onAction={revalidate}
-          shortcut={{ modifiers: ["cmd"], key: "r" }}
+          shortcut={Keyboard.Shortcut.Common.Refresh}
         />
         <MenuBarExtra.Item
           icon={Icon.List}

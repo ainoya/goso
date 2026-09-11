@@ -55,7 +55,9 @@ export function toPlainText(snapshot: Snapshot): string {
     }
     lines.push(provider.label + (provider.plan ? ` [${provider.plan}]` : ""));
     for (const window of provider.windows) {
-      lines.push(`  ${window.label}: ${windowValue(window)}  ${windowSubtitle(window, snapshot.generatedAt)}`);
+      lines.push(
+        `  ${window.label}: ${windowValue(window)}  ${windowSubtitle(window, snapshot.generatedAt)}`,
+      );
     }
   }
   return lines.join("\n");

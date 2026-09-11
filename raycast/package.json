@@ -29,7 +29,7 @@
   ],
   "dependencies": {
     "@goso/core": "link:../packages/core",
-    "@raycast/api": "^1.103.0",
+    "@raycast/api": "^2.3.0",
     "@raycast/utils": "^2.2.1"
   },
   "devDependencies": {
@@ -54,5 +54,10 @@
       "description": "Path to the goso executable. Raycast's Node cannot read Antigravity's SQLite databases, so the extension calls the CLI when it is available. Leave empty to search ~/.local/bin, /opt/homebrew/bin and /usr/local/bin.",
       "placeholder": "~/.local/bin/goso"
     }
-  ]
+  ],
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
 }

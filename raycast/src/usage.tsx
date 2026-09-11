@@ -59,7 +59,15 @@ function OverviewItem({ row, now }: { row: OverviewRow; now: number }) {
   );
 }
 
-function WindowItem({ provider, window, now }: { provider: ProviderSnapshot; window: UsageWindow; now: number }) {
+function WindowItem({
+  provider,
+  window,
+  now,
+}: {
+  provider: ProviderSnapshot;
+  window: UsageWindow;
+  now: number;
+}) {
   const accessories: List.Item.Accessory[] = [
     {
       tag: { value: windowValue(window), color: severityColor(window.usedPercent) },
