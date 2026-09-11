@@ -191,6 +191,11 @@ reason. The only thing cached is the returned percentages and reset times, for
 Everything else is read from files the agents already wrote. `goso` opens
 their SQLite databases read-only and never writes to them.
 
+Two more caches live beside that one, holding only derived counts — token
+totals per transcript, request timestamps per conversation — so a repeated run
+does not re-read inputs that have not changed. Delete `~/.cache/goso` at any
+time; it is rebuilt on the next run.
+
 ## Development
 
 ```bash
@@ -218,6 +223,22 @@ scripts/sample   renders the README samples from a fixture
 Adding an agent means adding one file under `packages/core/src/providers/` that
 returns a `ProviderSnapshot`, and listing it in `PROVIDER_IDS`. A provider that
 throws is reported as `error` for that row only — it never fails the run.
+
+### Performance
+
+Claude Code's transcripts run to hundreds of megabytes — a few hundred files of
+very long lines — and Antigravity keeps a SQLite database per conversation, so
+a naive scan dominates the run. Two things keep it fast:
+
+- Only lines carrying both `"usage"` and `"type":"assistant"` are decoded. The
+  scan works on raw bytes, so the bulk of the data is never turned into a
+  string.
+- Each file's contribution is cached against its size (and for transcripts, the
+  head bytes). Transcripts are append-only, so only the bytes added since the
+  last run are read; conversation databases are skipped whole when unchanged.
+
+That is roughly 950ms on a cold cache — most of it the one network call — and
+about 200ms after.
 
 ## License
 

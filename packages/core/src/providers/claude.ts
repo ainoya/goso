@@ -1,7 +1,9 @@
+import { open } from "node:fs/promises";
 import type { ProviderSnapshot, TokenBreakdown, UsageWindow } from "../types.ts";
 import { applyLimit, type GosoConfig } from "../config.ts";
+import { readCache, writeCache } from "../cache.ts";
 import { fetchClaudeUtilization } from "./claude-api.ts";
-import { DAY_MS, HOUR_MS, exists, findFiles, floorToHour, home, parseTimestamp, readJsonl } from "../util.ts";
+import { DAY_MS, HOUR_MS, exists, findFiles, floorToHour, home, mapConcurrent, parseTimestamp } from "../util.ts";
 
 /**
  * Claude Code keeps no rate-limit state on disk, so usage is reconstructed
@@ -64,45 +66,160 @@ function accumulate(into: TokenBreakdown, entry: Entry): void {
   into.total += entry.input + entry.output + entry.cacheRead + entry.cacheWrite;
 }
 
+const CACHE_NAME = "claude-transcripts.json";
+const CACHE_VERSION = 1;
+/** Bytes of each file's head kept to notice a file replaced rather than appended to. */
+const HEAD_BYTES = 256;
+/** Transcripts are I/O-bound; a small pool keeps the disk busy without thrashing. */
+const READ_CONCURRENCY = 8;
+
+/** Only lines carrying both markers can be an assistant message with usage. */
+const USAGE_MARKER = Buffer.from('"usage"');
+const ASSISTANT_MARKER = Buffer.from('"type":"assistant"');
+
+/** [ts, model, input, output, cacheRead, cacheWrite, dedupe key] */
+type CachedEntry = [number, string, number, number, number, number, string];
+
+interface FileCache {
+  /** Bytes consumed, always ending just past a newline so the next read starts on a line. */
+  offset: number;
+  /** Head of the file, to detect replacement — appends leave it untouched. */
+  head: string;
+  entries: CachedEntry[];
+}
+
+type TranscriptCache = Record<string, FileCache>;
+
+function toEntry(cached: CachedEntry): Entry {
+  const [ts, model, input, output, cacheRead, cacheWrite] = cached;
+  return { ts, model, input, output, cacheRead, cacheWrite };
+}
+
+/**
+ * Pull usage records out of a raw chunk of JSONL.
+ *
+ * Transcripts run to hundreds of megabytes across very long lines, and only a
+ * quarter of those lines carry usage. Scanning the bytes and decoding just the
+ * matching lines avoids turning the whole file into a string.
+ */
+export function parseChunk(buf: Buffer, base: number): { entries: CachedEntry[]; consumed: number } {
+  const entries: CachedEntry[] = [];
+  let start = 0;
+  let consumed = 0;
+
+  for (;;) {
+    const newline = buf.indexOf(0x0a, start);
+    if (newline === -1) break;
+    const line = buf.subarray(start, newline);
+    start = newline + 1;
+    consumed = start;
+
+    if (line.length === 0 || line[0] !== 0x7b) continue; // not a JSON object
+    if (!line.includes(USAGE_MARKER) || !line.includes(ASSISTANT_MARKER)) continue;
+
+    let record: Record<string, unknown>;
+    try {
+      record = JSON.parse(line.toString("utf8")) as Record<string, unknown>;
+    } catch {
+      continue; // partially written line
+    }
+    if (record["type"] !== "assistant") continue;
+
+    const message = record["message"] as
+      | { id?: string; model?: string; usage?: Record<string, unknown> }
+      | undefined;
+    const usage = message?.usage;
+    if (!usage) continue;
+
+    const ts = parseTimestamp(record["timestamp"]);
+    if (ts === undefined) continue;
+
+    entries.push([
+      ts,
+      String(message?.model ?? "unknown"),
+      Number(usage["input_tokens"] ?? 0),
+      Number(usage["output_tokens"] ?? 0),
+      Number(usage["cache_read_input_tokens"] ?? 0),
+      Number(usage["cache_creation_input_tokens"] ?? 0),
+      `${message?.id ?? ""}:${String(record["requestId"] ?? "")}`,
+    ]);
+  }
+
+  return { entries, consumed: base + consumed };
+}
+
+/**
+ * Read one transcript, reusing the cached records for the bytes already seen.
+ * Transcripts are append-only, so an unchanged prefix means only the tail is new.
+ */
+async function readFileEntries(
+  file: { path: string; size: number },
+  cached: FileCache | undefined,
+): Promise<FileCache> {
+  const handle = await open(file.path, "r");
+  try {
+    const head = Buffer.allocUnsafe(Math.min(HEAD_BYTES, file.size));
+    await handle.read(head, 0, head.length, 0);
+    const headKey = head.toString("base64");
+
+    const appended = cached !== undefined && cached.head === headKey && file.size >= cached.offset;
+    const from = appended ? cached.offset : 0;
+    const length = file.size - from;
+    if (length <= 0) return { offset: from, head: headKey, entries: cached?.entries ?? [] };
+
+    const buf = Buffer.allocUnsafe(length);
+    const { bytesRead } = await handle.read(buf, 0, length, from);
+    const { entries, consumed } = parseChunk(buf.subarray(0, bytesRead), from);
+
+    return {
+      offset: consumed,
+      head: headKey,
+      entries: appended ? [...cached!.entries, ...entries] : entries,
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
 async function readEntries(since: number): Promise<Entry[]> {
   const files = await findFiles(PROJECTS, (name) => name.endsWith(".jsonl"), { minMtimeMs: since });
+  const cache = (await readCache<TranscriptCache>(CACHE_NAME, CACHE_VERSION)) ?? {};
+  const next: TranscriptCache = {};
+
+  const results = await mapConcurrent(files, READ_CONCURRENCY, async (file) => {
+    try {
+      return { path: file.path, cache: await readFileEntries(file, cache[file.path]) };
+    } catch {
+      return undefined; // vanished or unreadable mid-run
+    }
+  });
+
   const seen = new Set<string>();
   const entries: Entry[] = [];
 
-  for (const file of files) {
-    for await (const record of readJsonl(file.path)) {
-      if (record["type"] !== "assistant") continue;
-      const message = record["message"] as
-        | { id?: string; model?: string; usage?: Record<string, unknown> }
-        | undefined;
-      const usage = message?.usage;
-      if (!usage) continue;
+  for (const result of results) {
+    if (!result) continue;
+    // Drop records that have aged out of the window so the cache stays bounded.
+    const fresh = result.cache.entries.filter((entry) => entry[0] >= since);
+    next[result.path] = { ...result.cache, entries: fresh };
 
+    for (const cached of fresh) {
       // The same assistant message can appear in several transcripts (resumes,
       // sidechains, compaction copies). Dedupe on message id + request id.
-      const key = `${message?.id ?? ""}:${String(record["requestId"] ?? "")}`;
+      const key = cached[6];
       if (key !== ":" && seen.has(key)) continue;
       if (key !== ":") seen.add(key);
-
-      const ts = parseTimestamp(record["timestamp"]);
-      if (ts === undefined || ts < since) continue;
-
-      entries.push({
-        ts,
-        model: String(message?.model ?? "unknown"),
-        input: Number(usage["input_tokens"] ?? 0),
-        output: Number(usage["output_tokens"] ?? 0),
-        cacheRead: Number(usage["cache_read_input_tokens"] ?? 0),
-        cacheWrite: Number(usage["cache_creation_input_tokens"] ?? 0),
-      });
+      entries.push(toEntry(cached));
     }
   }
+
+  await writeCache(CACHE_NAME, CACHE_VERSION, next);
 
   entries.sort((a, b) => a.ts - b.ts);
   return entries;
 }
 
-export interface Block {
+interface Block {
   startsAt: number;
   entries: Entry[];
 }

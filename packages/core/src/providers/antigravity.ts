@@ -1,5 +1,6 @@
 import type { ProviderSnapshot, UsageWindow } from "../types.ts";
 import { applyLimit, type GosoConfig } from "../config.ts";
+import { readCache, writeCache } from "../cache.ts";
 import { DAY_MS, HOUR_MS, exists, findFiles, home, parseDuration, readVarint } from "../util.ts";
 
 /**
@@ -20,6 +21,20 @@ const ROOTS = [
 ];
 
 const RESETS_IN = /Resets in ([0-9hms.]+)/;
+
+const CACHE_NAME = "antigravity-conversations.json";
+const CACHE_VERSION = 1;
+
+/** What one conversation database contributed, keyed by its path. */
+interface DbScan {
+  size: number;
+  mtimeMs: number;
+  generations: number[];
+  prompts: number[];
+  quota?: { observedAt: number; resetsAt: number };
+}
+
+type ConversationCache = Record<string, DbScan>;
 
 /**
  * Decode the step's `metadata` blob, which is a protobuf message whose field 1
@@ -83,7 +98,7 @@ function loadSqlite(): Promise<SqliteModule | undefined> {
   return sqlitePromise;
 }
 
-function scanDatabase(sqlite: SqliteModule, file: string, since: number, into: Scan): void {
+function scanDatabase(sqlite: SqliteModule, file: string, into: { generations: number[]; prompts: number[]; quota?: { observedAt: number; resetsAt: number } }): void {
   let db: InstanceType<SqliteModule["DatabaseSync"]>;
   try {
     db = new sqlite.DatabaseSync(file, { readOnly: true });
@@ -97,7 +112,7 @@ function scanDatabase(sqlite: SqliteModule, file: string, since: number, into: S
 
     for (const step of steps) {
       const ts = stepTimestamp(step.m);
-      if (ts === undefined || ts < since) continue;
+      if (ts === undefined) continue;
       if (step.t === STEP_MODEL_GENERATION) into.generations.push(ts);
       else into.prompts.push(ts);
     }
@@ -166,8 +181,40 @@ export async function collectAntigravity(now: number, config: GosoConfig): Promi
     };
   }
 
+  // Conversations are rewritten rather than appended to, so an unchanged file
+  // is skipped whole. Most of the week's databases are finished conversations.
+  const cache = (await readCache<ConversationCache>(CACHE_NAME, CACHE_VERSION)) ?? {};
+  const next: ConversationCache = {};
   const scan: Scan = { generations: [], prompts: [] };
-  for (const file of files) scanDatabase(sqlite, file.path, weekStart, scan);
+
+  for (const file of files) {
+    const cached = cache[file.path];
+    let result: DbScan;
+    if (cached && cached.size === file.size && cached.mtimeMs === file.mtimeMs) {
+      result = cached;
+    } else {
+      const fresh: { generations: number[]; prompts: number[]; quota?: DbScan["quota"] } = {
+        generations: [],
+        prompts: [],
+      };
+      scanDatabase(sqlite, file.path, fresh);
+      result = { size: file.size, mtimeMs: file.mtimeMs, ...fresh };
+    }
+
+    // Drop steps that have aged out of the window so the cache stays bounded.
+    next[file.path] = {
+      ...result,
+      generations: result.generations.filter((ts) => ts >= weekStart),
+      prompts: result.prompts.filter((ts) => ts >= weekStart),
+    };
+
+    scan.generations.push(...next[file.path]!.generations);
+    scan.prompts.push(...next[file.path]!.prompts);
+    const quota = result.quota;
+    if (quota && (!scan.quota || quota.observedAt > scan.quota.observedAt)) scan.quota = quota;
+  }
+
+  await writeCache(CACHE_NAME, CACHE_VERSION, next);
 
   if (scan.generations.length === 0 && scan.prompts.length === 0) {
     return { ...base, status: "unavailable", detail: "no timestamped Antigravity steps in the last 7 days" };

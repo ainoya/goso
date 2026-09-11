@@ -1,8 +1,6 @@
-import { createReadStream } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { createInterface } from "node:readline";
 
 export const HOUR_MS = 60 * 60 * 1000;
 export const DAY_MS = 24 * HOUR_MS;
@@ -67,25 +65,6 @@ export async function findFiles(
   return out;
 }
 
-/** Stream a JSONL file line by line, skipping unparseable lines. */
-export async function* readJsonl(file: string): AsyncGenerator<Record<string, unknown>> {
-  const stream = createReadStream(file, { encoding: "utf8" });
-  const rl = createInterface({ input: stream, crlfDelay: Infinity });
-  try {
-    for await (const line of rl) {
-      if (!line || line[0] !== "{") continue;
-      try {
-        yield JSON.parse(line) as Record<string, unknown>;
-      } catch {
-        /* partially-written line */
-      }
-    }
-  } finally {
-    rl.close();
-    stream.destroy();
-  }
-}
-
 /**
  * Read the last `bytes` of a file as text. Session logs append their newest
  * state at the end, so a tail read avoids parsing multi-megabyte histories.
@@ -142,6 +121,31 @@ export function parseDuration(text: string): number | undefined {
   const [, h, m, s] = match;
   if (h === undefined && m === undefined && s === undefined) return undefined;
   return (Number(h ?? 0) * 3600 + Number(m ?? 0) * 60 + Number(s ?? 0)) * 1000;
+}
+
+/**
+ * Map over items with a bounded number in flight. Providers read dozens of
+ * files; unbounded Promise.all opens them all at once, and a plain loop leaves
+ * the disk idle between reads.
+ */
+export async function mapConcurrent<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = next++;
+      if (index >= items.length) return;
+      results[index] = await fn(items[index]!);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
 }
 
 export function sum(values: number[]): number {
